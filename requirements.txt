@@ -1,0 +1,12 @@
+python-dotenv
+pandas
+numpy
+autogen-agentchat
+autogen-ext[openai]
+matplotlib
+seaborn
+scipy
+plotly
+python-docx
+streamlit
+plotly
