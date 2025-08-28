@@ -11,7 +11,7 @@ import plotly.figure_factory as ff
 from plotly.subplots import make_subplots
 import seaborn as sns
 import matplotlib.pyplot as plt
-from io import BytesIO
+from io import BytesIO, StringIO
 
 # Import your existing EDA system
 from app import MultiAgentEDASystem
@@ -116,7 +116,7 @@ def main():
         # Model selection
         model_name = st.selectbox(
             "Select AI Model",
-            ["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"],
+            ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"],
             index=0,
             help="Choose the OpenAI model for analysis"
         )
@@ -155,9 +155,9 @@ def main():
                 
                 # Show data info
                 with st.expander("View Data Info"):
-                    buffer = BytesIO()
+                    buffer = StringIO()
                     data.info(buf=buffer)
-                    st.text(buffer.getvalue().decode())
+                    st.text(buffer.getvalue())
                 
             except Exception as e:
                 st.error(f"❌ Error loading file: {str(e)}")

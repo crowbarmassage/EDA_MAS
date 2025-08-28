@@ -53,8 +53,45 @@ class DataLoaderAgent(AssistantAgent):
             if not os.path.exists(file_path):
                 raise FileNotFoundError(f"File not found at {file_path}")
             
+            # Load data
             data = pd.read_csv(file_path)
+            
+            # Handle duplicate column names
+            if len(data.columns) != len(set(data.columns)):
+                print("⚠️ Warning: Duplicate column names detected. Renaming duplicates...")
+                # Get duplicate columns
+                duplicate_cols = data.columns[data.columns.duplicated()].tolist()
+                print(f"   Duplicate columns: {duplicate_cols}")
+                
+                # Rename duplicate columns by adding suffix
+                new_columns = []
+                seen_columns = {}
+                
+                for col in data.columns:
+                    if col in seen_columns:
+                        seen_columns[col] += 1
+                        new_columns.append(f"{col}.{seen_columns[col]}")
+                    else:
+                        seen_columns[col] = 0
+                        new_columns.append(col)
+                
+                data.columns = new_columns
+                print(f"   Columns renamed to: {list(data.columns)}")
+            
+            # Clean empty rows (rows with all NaN values)
+            initial_rows = len(data)
+            data = data.dropna(how='all')
+            if len(data) < initial_rows:
+                print(f"   Removed {initial_rows - len(data)} completely empty rows")
+            
+            # Clean empty columns (columns with all NaN values)
+            initial_cols = len(data.columns)
+            data = data.dropna(axis=1, how='all')
+            if len(data.columns) < initial_cols:
+                print(f"   Removed {initial_cols - len(data.columns)} completely empty columns")
+            
             return data
+            
         except Exception as e:
             raise Exception(f"Error loading data: {e}")
     
@@ -98,33 +135,70 @@ class DataAnalyzerAgent(AssistantAgent):
         """Perform comprehensive data analysis."""
         analysis = {}
         
-        # Basic statistics
-        analysis["shape"] = data.shape
-        analysis["info"] = data.info()
-        
-        # Descriptive statistics for numerical columns
-        numerical_cols = data.select_dtypes(include=[np.number]).columns
-        if len(numerical_cols) > 0:
-            analysis["numerical_stats"] = data[numerical_cols].describe().to_dict()
-            analysis["correlation_matrix"] = data[numerical_cols].corr().to_dict()
-        
-        # Categorical analysis
-        categorical_cols = data.select_dtypes(include=['object']).columns
-        if len(categorical_cols) > 0:
-            analysis["categorical_stats"] = {}
-            for col in categorical_cols:
-                analysis["categorical_stats"][col] = {
-                    "unique_values": data[col].nunique(),
-                    "value_counts": data[col].value_counts().head(10).to_dict(),
-                    "missing_count": data[col].isnull().sum()
+        try:
+            # Basic statistics
+            analysis["shape"] = data.shape
+            analysis["info"] = data.info()
+            
+            # Descriptive statistics for numerical columns
+            numerical_cols = data.select_dtypes(include=[np.number]).columns
+            if len(numerical_cols) > 0:
+                # Handle potential errors in describe()
+                try:
+                    desc_stats = data[numerical_cols].describe()
+                    analysis["numerical_stats"] = desc_stats.to_dict()
+                except Exception as e:
+                    print(f"Warning: Could not generate numerical stats: {e}")
+                    analysis["numerical_stats"] = {}
+                
+                # Handle potential errors in correlation
+                try:
+                    if len(numerical_cols) > 1:
+                        corr_matrix = data[numerical_cols].corr()
+                        analysis["correlation_matrix"] = corr_matrix.to_dict()
+                    else:
+                        analysis["correlation_matrix"] = {}
+                except Exception as e:
+                    print(f"Warning: Could not generate correlation matrix: {e}")
+                    analysis["correlation_matrix"] = {}
+            
+            # Categorical analysis
+            categorical_cols = data.select_dtypes(include=['object']).columns
+            if len(categorical_cols) > 0:
+                analysis["categorical_stats"] = {}
+                for col in categorical_cols:
+                    try:
+                        value_counts = data[col].value_counts()
+                        analysis["categorical_stats"][col] = {
+                            "unique_values": data[col].nunique(),
+                            "value_counts": value_counts.head(10).to_dict() if len(value_counts) > 0 else {},
+                            "missing_count": data[col].isnull().sum()
+                        }
+                    except Exception as e:
+                        print(f"Warning: Could not analyze categorical column {col}: {e}")
+                        analysis["categorical_stats"][col] = {
+                            "unique_values": 0,
+                            "value_counts": {},
+                            "missing_count": data[col].isnull().sum()
+                        }
+            
+            # Missing data analysis
+            analysis["missing_data"] = {
+                "total_missing": data.isnull().sum().sum(),
+                "missing_by_column": dict(data.isnull().sum()),
+                "missing_percentage": dict((data.isnull().sum() / len(data)) * 100)
+            }
+            
+        except Exception as e:
+            print(f"Error in data analysis: {e}")
+            analysis = {
+                "shape": data.shape,
+                "error": str(e),
+                "missing_data": {
+                    "total_missing": data.isnull().sum().sum(),
+                    "missing_by_column": dict(data.isnull().sum())
                 }
-        
-        # Missing data analysis
-        analysis["missing_data"] = {
-            "total_missing": data.isnull().sum().sum(),
-            "missing_by_column": dict(data.isnull().sum()),
-            "missing_percentage": dict((data.isnull().sum() / len(data)) * 100)
-        }
+            }
         
         return analysis
 
@@ -432,43 +506,67 @@ class ReportGeneratorAgent(AssistantAgent):
             numerical_cols = data.select_dtypes(include=[np.number]).columns
             if len(numerical_cols) > 0:
                 doc.add_paragraph('Numerical Variables Summary:')
-                stats_df = data[numerical_cols].describe()
-                
-                # Create stats table
-                stats_table = doc.add_table(rows=1, cols=len(stats_df.index) + 1)
-                stats_table.style = 'Table Grid'
-                stats_hdr = stats_table.rows[0].cells
-                stats_hdr[0].text = 'Statistic'
-                for i, col in enumerate(stats_df.columns):
-                    stats_hdr[i + 1].text = col
-                
-                for stat in stats_df.index:
-                    row_cells = stats_table.add_row().cells
-                    row_cells[0].text = stat
-                    for i, col in enumerate(stats_df.columns):
-                        row_cells[i + 1].text = f"{stats_df.loc[stat, col]:.2f}"
-                
-                doc.add_paragraph()
+                try:
+                    stats_df = data[numerical_cols].describe()
+                    
+                    # Create stats table
+                    if not stats_df.empty and len(stats_df.columns) > 0:
+                        stats_table = doc.add_table(rows=1, cols=len(stats_df.index) + 1)
+                        stats_table.style = 'Table Grid'
+                        stats_hdr = stats_table.rows[0].cells
+                        stats_hdr[0].text = 'Statistic'
+                        for i, col in enumerate(stats_df.columns):
+                            stats_hdr[i + 1].text = str(col)
+                        
+                        for stat in stats_df.index:
+                            row_cells = stats_table.add_row().cells
+                            row_cells[0].text = str(stat)
+                            for i, col in enumerate(stats_df.columns):
+                                try:
+                                    value = stats_df.loc[stat, col]
+                                    if pd.isna(value):
+                                        row_cells[i + 1].text = "N/A"
+                                    else:
+                                        row_cells[i + 1].text = f"{value:.2f}"
+                                except:
+                                    row_cells[i + 1].text = "Error"
+                        
+                        doc.add_paragraph()
+                    else:
+                        doc.add_paragraph('⚠️ Could not generate numerical statistics table.')
+                        
+                except Exception as e:
+                    doc.add_paragraph(f'⚠️ Error generating numerical statistics: {str(e)}')
+                    doc.add_paragraph()
             
             # Categorical variables analysis
             categorical_cols = data.select_dtypes(include=['object']).columns
             if len(categorical_cols) > 0:
                 doc.add_paragraph('Categorical Variables Analysis:')
                 for col in categorical_cols:
-                    doc.add_paragraph(f'{col}:')
-                    value_counts = data[col].value_counts()
-                    cat_table = doc.add_table(rows=1, cols=2)
-                    cat_table.style = 'Table Grid'
-                    cat_hdr = cat_table.rows[0].cells
-                    cat_hdr[0].text = 'Category'
-                    cat_hdr[1].text = 'Count'
-                    
-                    for category, count in value_counts.head(10).items():
-                        row_cells = cat_table.add_row().cells
-                        row_cells[0].text = str(category)
-                        row_cells[1].text = str(count)
-                    
-                    doc.add_paragraph()
+                    try:
+                        doc.add_paragraph(f'{col}:')
+                        value_counts = data[col].value_counts()
+                        
+                        if len(value_counts) > 0:
+                            cat_table = doc.add_table(rows=1, cols=2)
+                            cat_table.style = 'Table Grid'
+                            cat_hdr = cat_table.rows[0].cells
+                            cat_hdr[0].text = 'Category'
+                            cat_hdr[1].text = 'Count'
+                            
+                            for category, count in value_counts.head(10).items():
+                                row_cells = cat_table.add_row().cells
+                                row_cells[0].text = str(category) if pd.notna(category) else "Missing"
+                                row_cells[1].text = str(count)
+                            
+                            doc.add_paragraph()
+                        else:
+                            doc.add_paragraph(f'⚠️ No data available for {col}')
+                            
+                    except Exception as e:
+                        doc.add_paragraph(f'⚠️ Error analyzing {col}: {str(e)}')
+                        doc.add_paragraph()
             
             # 5. Visual Analysis
             doc.add_heading('5. Visual Analysis', level=1)
@@ -720,12 +818,36 @@ class MultiAgentEDASystem:
             
             print(f"✅ Dataset loaded directly: {data.shape[0]} rows × {data.shape[1]} columns")
             
-            # Step 1: Validate data
-            print("\n📊 Step 1: Validating data...")
-            data_info = self.agents['data_loader'].get_data_info(data)
+            # Step 1: Validate and clean data
+            print("\n📊 Step 1: Validating and cleaning data...")
             
-            print(f"   - Shape: {data.shape}")
-            print(f"   - Columns: {', '.join(data.columns.tolist())}")
+            # Handle duplicate column names if they exist
+            if len(data.columns) != len(set(data.columns)):
+                print("⚠️ Warning: Duplicate column names detected. Renaming duplicates...")
+                duplicate_cols = data.columns[data.columns.duplicated()].tolist()
+                print(f"   Duplicate columns: {duplicate_cols}")
+                
+                new_columns = []
+                seen_columns = {}
+                
+                for col in data.columns:
+                    if col in seen_columns:
+                        seen_columns[col] += 1
+                        new_columns.append(f"{col}.{seen_columns[col]}")
+                    else:
+                        seen_columns[col] = 0
+                        new_columns.append(col)
+                
+                data.columns = new_columns
+                print(f"   Columns renamed to: {list(data.columns)}")
+            
+            # Clean empty rows and columns
+            initial_rows, initial_cols = data.shape
+            data = data.dropna(how='all')
+            data = data.dropna(axis=1, how='all')
+            print(f"   Cleaned data shape: {data.shape[0]} rows × {data.shape[1]} columns")
+            
+            data_info = self.agents['data_loader'].get_data_info(data)
             print(f"   - Memory usage: {data_info['memory_usage']:.2f} KB")
             
             # Step 2: Perform data analysis
