@@ -18,6 +18,21 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import os, sys, subprocess
+
+def launch_streamlit():
+    if os.environ.get("COLAB", "0") == "1":
+        print("Skipping local Streamlit launch in Colab.")
+        return
+    try:
+        subprocess.run([
+            sys.executable, "-m", "streamlit", "run", "streamlit_app.py",
+            "--server.port", "8501", "--server.address", "localhost",
+            "--browser.gatherUsageStats", "false"
+        ])
+    except Exception as e:
+        print("Error launching Streamlit:", e)
+
 class DataLoaderAgent(AssistantAgent):
     """Agent responsible for loading and validating the dataset."""
     
